@@ -17,7 +17,7 @@ const formatNumber = (n: number) =>
 
 export function KeywordTrends({ rows }: Readonly<{ rows: KeywordRow[] }>) {
   return (
-    <Card className="overflow-hidden border-0">
+    <Card className="overflow-hidden">
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
