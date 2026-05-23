@@ -95,7 +95,7 @@ export function MarketingFooter() {
         </div>
 
         <div className="flex flex-col items-center justify-between gap-4 border-t border-white/[0.06] pt-8 md:flex-row">
-          <p className="text-xs text-slate-600">
+          <p className="text-xs text-slate-600" suppressHydrationWarning>
             © {new Date().getFullYear()} AIV. All rights reserved.
           </p>
           <p className="text-xs text-slate-600">

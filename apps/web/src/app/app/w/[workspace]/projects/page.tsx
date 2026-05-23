@@ -11,9 +11,15 @@ import { StartCrawlButton } from "@/modules/crawler/presentation/start-crawl-but
 import { ProjectWizard } from "@/modules/projects/presentation/project-wizard";
 import { ProjectActionsMenu } from "@/modules/projects/presentation/project-actions-menu";
 
-const series = (n: number, base = 50, jitter = 10) =>
+// Deterministic pseudo-random for consistent server/client hydration
+const seededRandom = (seed: number) => {
+  const x = Math.sin(seed) * 10000;
+  return x - Math.floor(x);
+};
+
+const series = (n: number, base = 50, jitter = 10, seed = 42) =>
   Array.from({ length: n }, (_, i) =>
-    Math.round(base + Math.sin(i / 2) * jitter + (Math.random() - 0.5) * jitter),
+    Math.round(base + Math.sin(i / 2) * jitter + (seededRandom(seed + i) - 0.5) * jitter),
   );
 
 export default async function ProjectsPage({
