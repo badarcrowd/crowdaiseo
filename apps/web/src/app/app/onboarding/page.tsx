@@ -9,7 +9,7 @@ export default async function OnboardingPage() {
 
   // If the user already has a workspace, send them to it. Onboarding is a
   // first-run flow only.
-  if (workspaces.length > 0) {
+  if (workspaces.length > 0 && workspaces[0]) {
     redirect(`/app/w/${workspaces[0].slug}/dashboard`);
   }
 
