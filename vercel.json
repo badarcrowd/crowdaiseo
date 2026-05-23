@@ -1,5 +1,5 @@
 {
-  "buildCommand": "cd apps/web && pnpm exec prisma generate && pnpm exec next build",
+  "buildCommand": "pnpm --filter web run build",
   "installCommand": "pnpm install --frozen-lockfile",
   "outputDirectory": "apps/web/.next",
   "framework": "nextjs"
