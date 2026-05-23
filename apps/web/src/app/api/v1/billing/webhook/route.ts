@@ -10,10 +10,6 @@ import { prisma } from "@/lib/prisma/client";
 import { logger } from "@/lib/logger";
 import { trackServer } from "@/lib/analytics/track";
 
-// Stripe requires the raw body for signature verification — do NOT use
-// Next.js body parsing on this route.
-export const config = { api: { bodyParser: false } };
-
 export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!isStripeConfigured()) {
     return NextResponse.json({ error: "Billing not configured" }, { status: 503 });
