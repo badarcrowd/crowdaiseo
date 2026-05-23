@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { getStripe } from "@/modules/billing/infrastructure/stripe";
+import { getStripe, isStripeConfigured } from "@/modules/billing/infrastructure/stripe";
 import { serverEnv } from "@/config/env";
 import {
   syncSubscriptionFromStripe,
@@ -15,6 +15,10 @@ import { trackServer } from "@/lib/analytics/track";
 export const config = { api: { bodyParser: false } };
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  if (!isStripeConfigured()) {
+    return NextResponse.json({ error: "Billing not configured" }, { status: 503 });
+  }
+
   const signature = req.headers.get("stripe-signature");
   if (!signature) {
     return NextResponse.json({ error: "Missing stripe-signature" }, { status: 400 });
@@ -27,6 +31,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const rawBody = await req.text();
   const stripe = getStripe();
+  if (!stripe) {
+    return NextResponse.json({ error: "Billing not configured" }, { status: 503 });
+  }
 
   let event: Stripe.Event;
   try {
