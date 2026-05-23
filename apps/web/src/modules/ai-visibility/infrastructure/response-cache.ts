@@ -1,4 +1,4 @@
-import { redis } from "@/lib/redis/client";
+import { getRedis } from "@/lib/redis/client";
 import type { ResponseCache } from "../domain/ports";
 import type { LLMResponse } from "../domain/entities";
 
@@ -17,6 +17,8 @@ const MAX_BYTES = 1_000_000;
 
 export const responseCache: ResponseCache = {
   async get(key) {
+    const redis = getRedis();
+    if (!redis) return null; // No cache without Redis
     const raw = await redis.get(`${KEY_PREFIX}:${key}`);
     if (!raw) return null;
     try {
@@ -26,6 +28,8 @@ export const responseCache: ResponseCache = {
     }
   },
   async set(key, value, ttlSeconds = DEFAULT_TTL) {
+    const redis = getRedis();
+    if (!redis) return; // Skip caching without Redis
     const json = JSON.stringify(value);
     if (json.length > MAX_BYTES) return; // too large to cache
     await redis.set(`${KEY_PREFIX}:${key}`, json, "EX", ttlSeconds);

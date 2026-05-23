@@ -1,6 +1,6 @@
 import "server-only";
 import { headers } from "next/headers";
-import { redis } from "@/lib/redis/client";
+import { getRedis } from "@/lib/redis/client";
 import { serverEnv } from "@/config/env";
 import { AppError } from "@/lib/errors";
 
@@ -43,6 +43,12 @@ export const checkRateLimit = async (
   opts: RateLimitOpts,
   identifierOverride?: string,
 ): Promise<{ remaining: number }> => {
+  const redis = getRedis();
+  // Skip rate limiting if Redis unavailable (during build or misconfigured)
+  if (!redis) {
+    return { remaining: opts.limit };
+  }
+
   const ip = identifierOverride ?? (await getIp());
   const prefix = opts.prefix ?? serverEnv.RATE_LIMIT_REDIS_PREFIX;
   const windowKey = Math.floor(Date.now() / (opts.windowSecs * 1000));

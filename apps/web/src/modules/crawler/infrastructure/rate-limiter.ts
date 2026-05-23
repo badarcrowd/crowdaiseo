@@ -1,4 +1,4 @@
-import { redis } from "@/lib/redis/client";
+import { getRedis } from "@/lib/redis/client";
 import type { RateLimiter } from "../domain/ports";
 
 /**
@@ -58,6 +58,10 @@ export const createRateLimiter = (
 
   return {
     async acquire(key, { timeoutMs = 30_000 } = {}) {
+      const redis = getRedis();
+      // Skip rate limiting if Redis unavailable
+      if (!redis) return;
+
       const fullKey = `${prefix}:${key}`;
       const deadline = Date.now() + timeoutMs;
 

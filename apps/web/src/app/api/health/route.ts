@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma/client";
-import { redis } from "@/lib/redis/client";
-import { queues } from "@/lib/queue/queues";
+import { getRedis } from "@/lib/redis/client";
+import { getQueues } from "@/lib/queue/queues";
 import { circuitSnapshot } from "@/lib/ai/circuit-breaker";
 import { snapshot as metricsSnapshot } from "@/lib/observability/metrics";
 
@@ -22,16 +22,20 @@ const probe = async (label: string, fn: () => Promise<void>): Promise<CheckResul
 };
 
 export const GET = async () => {
+  const redis = getRedis();
+  const queues = getQueues();
   const [db, redisCheck, queueDepths] = await Promise.all([
     probe("db", async () => {
       await prisma.$queryRaw`SELECT 1`;
     }),
     probe("redis", async () => {
+      if (!redis) throw new Error("Redis not configured");
       const pong = await redis.ping();
       if (pong !== "PONG") throw new Error("unexpected ping response");
     }),
     (async () => {
       try {
+        if (!queues) return null;
         const [scan, promptRun, crawlPage, dlq] = await Promise.all([
           queues.aiVisibilityScan.getJobCounts("waiting", "active", "delayed", "failed"),
           queues.aiPromptRun.getJobCounts("waiting", "active", "delayed", "failed"),

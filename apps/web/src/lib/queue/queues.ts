@@ -7,6 +7,8 @@ import { createQueueConnection } from "./connection";
  * `./types.ts`, and add a processor under `./workers/`.
  *
  * Naming convention: `<domain>.<action>` — e.g. `crawl.page`.
+ * 
+ * Queues are lazily initialized to avoid Redis connections during build.
  */
 export const QUEUE_NAMES = {
   AI_VISIBILITY_SCAN: "ai-visibility.scan",
@@ -37,66 +39,92 @@ const baseDefaults = {
   removeOnFail: { age: 60 * 60 * 24 * 7 },
 };
 
-const opts = (overrides: Partial<typeof baseDefaults> = {}) => ({
-  connection: createQueueConnection(),
-  prefix,
-  defaultJobOptions: { ...baseDefaults, ...overrides },
-});
+// Cache for lazy-loaded queues
+let _queues: typeof queues | null = null;
+let _queueEvents: typeof queueEvents | null = null;
 
-export const queues = {
-  aiVisibilityScan: new Queue(QUEUE_NAMES.AI_VISIBILITY_SCAN, opts()),
-  seoAudit: new Queue(QUEUE_NAMES.SEO_AUDIT, opts()),
-  aiPromptRun: new Queue(QUEUE_NAMES.AI_PROMPT_RUN, opts()),
-  notificationSend: new Queue(QUEUE_NAMES.NOTIFICATION_SEND, opts()),
-  // Crawl orchestrator job — one per crawl. Light: just fetches
-  // robots/sitemap and seeds the frontier.
-  crawlStart: new Queue(QUEUE_NAMES.CRAWL_START, opts({ attempts: 2 })),
-  // Per-page fetch + parse. Higher attempts because transient network
-  // failures are common; longer backoff to play nicely with origin rate
-  // limits.
-  crawlPage: new Queue(QUEUE_NAMES.CRAWL_PAGE, opts({
-    attempts: 5,
-    backoff: { type: "exponential", delay: 10_000 },
-  })),
-  // Report generation — PDF render + storage upload + email delivery.
-  // High retry count because Playwright can flake transiently.
-  reportGenerate: new Queue(QUEUE_NAMES.REPORT_GENERATE, opts({
-    attempts: 4,
-    backoff: { type: "exponential", delay: 15_000 },
-  })),
-  // Schedule tick — emits a single repeatable job (configured at boot)
-  // that fans out due schedules.
-  reportScheduleTick: new Queue(QUEUE_NAMES.REPORT_SCHEDULE_TICK, opts({
-    attempts: 1,
-    removeOnComplete: { age: 60 * 60, count: 100 },
-  })),
-  // Executive insight weekly tick — fires every Monday at 08:00 UTC.
-  executiveInsightWeeklyTick: new Queue(
-    QUEUE_NAMES.EXECUTIVE_INSIGHT_WEEKLY_TICK,
-    opts({
-      attempts: 2,
-      removeOnComplete: { age: 60 * 60 * 24, count: 50 },
-    }),
-  ),
-  // Dead-letter queue — keep failed jobs 30 days for inspection/replay.
-  dlq: new Queue(QUEUE_NAMES.DLQ, {
-    connection: createQueueConnection(),
+function createQueues() {
+  const connection = createQueueConnection();
+  if (!connection) {
+    // Return mock queues during build
+    return null;
+  }
+
+  const opts = (overrides: Partial<typeof baseDefaults> = {}) => ({
+    connection,
     prefix,
-    defaultJobOptions: {
+    defaultJobOptions: { ...baseDefaults, ...overrides },
+  });
+
+  return {
+    aiVisibilityScan: new Queue(QUEUE_NAMES.AI_VISIBILITY_SCAN, opts()),
+    seoAudit: new Queue(QUEUE_NAMES.SEO_AUDIT, opts()),
+    aiPromptRun: new Queue(QUEUE_NAMES.AI_PROMPT_RUN, opts()),
+    notificationSend: new Queue(QUEUE_NAMES.NOTIFICATION_SEND, opts()),
+    crawlStart: new Queue(QUEUE_NAMES.CRAWL_START, opts({ attempts: 2 })),
+    crawlPage: new Queue(QUEUE_NAMES.CRAWL_PAGE, opts({
+      attempts: 5,
+      backoff: { type: "exponential", delay: 10_000 },
+    })),
+    reportGenerate: new Queue(QUEUE_NAMES.REPORT_GENERATE, opts({
+      attempts: 4,
+      backoff: { type: "exponential", delay: 15_000 },
+    })),
+    reportScheduleTick: new Queue(QUEUE_NAMES.REPORT_SCHEDULE_TICK, opts({
       attempts: 1,
-      removeOnComplete: false,
-      removeOnFail: { age: 60 * 60 * 24 * 30 },
-    },
-  }),
-} as const;
+      removeOnComplete: { age: 60 * 60, count: 100 },
+    })),
+    executiveInsightWeeklyTick: new Queue(
+      QUEUE_NAMES.EXECUTIVE_INSIGHT_WEEKLY_TICK,
+      opts({
+        attempts: 2,
+        removeOnComplete: { age: 60 * 60 * 24, count: 50 },
+      }),
+    ),
+    dlq: new Queue(QUEUE_NAMES.DLQ, {
+      connection,
+      prefix,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: false,
+        removeOnFail: { age: 60 * 60 * 24 * 30 },
+      },
+    }),
+  } as const;
+}
 
-export const queueEvents = {
-  aiVisibilityScan: new QueueEvents(QUEUE_NAMES.AI_VISIBILITY_SCAN, {
-    connection: createQueueConnection(),
-    prefix,
-  }),
-  crawlStart: new QueueEvents(QUEUE_NAMES.CRAWL_START, {
-    connection: createQueueConnection(),
-    prefix,
-  }),
-} as const;
+function createQueueEvents() {
+  const connection = createQueueConnection();
+  if (!connection) return null;
+
+  return {
+    aiVisibilityScan: new QueueEvents(QUEUE_NAMES.AI_VISIBILITY_SCAN, {
+      connection,
+      prefix,
+    }),
+    crawlStart: new QueueEvents(QUEUE_NAMES.CRAWL_START, {
+      connection: createQueueConnection()!,
+      prefix,
+    }),
+  } as const;
+}
+
+// Lazy getters
+export function getQueues() {
+  if (_queues === null) {
+    _queues = createQueues() as typeof queues;
+  }
+  return _queues;
+}
+
+export function getQueueEvents() {
+  if (_queueEvents === null) {
+    _queueEvents = createQueueEvents() as typeof queueEvents;
+  }
+  return _queueEvents;
+}
+
+// Legacy exports for backward compatibility - will be null during build
+// Use getQueues() and getQueueEvents() instead for safe access
+export const queues = null as unknown as NonNullable<ReturnType<typeof createQueues>>;
+export const queueEvents = null as unknown as NonNullable<ReturnType<typeof createQueueEvents>>;
