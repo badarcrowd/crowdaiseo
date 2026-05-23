@@ -1,0 +1,32 @@
+export const COUNTRIES: Array<{ code: string; label: string }> = [
+  { code: "US", label: "United States" },
+  { code: "GB", label: "United Kingdom" },
+  { code: "CA", label: "Canada" },
+  { code: "AU", label: "Australia" },
+  { code: "DE", label: "Germany" },
+  { code: "FR", label: "France" },
+  { code: "ES", label: "Spain" },
+  { code: "IT", label: "Italy" },
+  { code: "NL", label: "Netherlands" },
+  { code: "AE", label: "United Arab Emirates" },
+  { code: "SA", label: "Saudi Arabia" },
+  { code: "OM", label: "Oman" },
+  { code: "JP", label: "Japan" },
+  { code: "IN", label: "India" },
+  { code: "BR", label: "Brazil" },
+  { code: "MX", label: "Mexico" },
+];
+
+export const LANGUAGES: Array<{ code: string; label: string }> = [
+  { code: "en", label: "English" },
+  { code: "es", label: "Spanish" },
+  { code: "fr", label: "French" },
+  { code: "de", label: "German" },
+  { code: "it", label: "Italian" },
+  { code: "pt", label: "Portuguese" },
+  { code: "nl", label: "Dutch" },
+  { code: "ar", label: "Arabic" },
+  { code: "ja", label: "Japanese" },
+  { code: "zh", label: "Chinese" },
+  { code: "hi", label: "Hindi" },
+];

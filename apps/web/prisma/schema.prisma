@@ -1,0 +1,1286 @@
+// =====================================================================
+// AIV — Prisma schema (starter)
+//
+// Design notes:
+// - Supabase Auth owns the `auth.users` table; we mirror its id via `User`
+//   (FK by uuid) and DO NOT manage auth state from Prisma.
+// - Workspaces are the multi-tenancy boundary. Every domain row carries
+//   `workspaceId` so RLS policies (in Supabase) can enforce isolation.
+// - All ids are CUID2-friendly strings except where they bridge Supabase
+//   Auth (uuid).
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------
+// Identity & Workspaces
+// ---------------------------------------------------------------------
+
+model User {
+  id              String   @id @db.Uuid // mirrors auth.users.id
+  email           String   @unique
+  fullName        String?
+  avatarUrl       String?
+  lastWorkspaceId String? // last active workspace for team switching
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  memberships     WorkspaceMember[]
+  ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
+  sentInvites     WorkspaceInvite[] @relation("InviteSender")
+
+  @@map("users")
+}
+
+model Workspace {
+  id                String             @id @default(cuid())
+  slug              String             @unique
+  name              String
+  ownerId           String             @db.Uuid
+  planTier          PlanTier           @default(FREE)
+  billingCustomerId String?            // Stripe customer id
+  subscriptionId    String?            // Stripe subscription id
+  subscriptionStatus SubscriptionStatus @default(TRIALING)
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  trialEndsAt       DateTime?
+  trialActivatedAt  DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  deletedAt         DateTime?
+
+  owner            User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members          WorkspaceMember[]
+  invites          WorkspaceInvite[]
+  projects         Project[]
+  apiKeys          ApiKey[]
+  auditEvents      AuditEvent[]
+  jobs             Job[]
+  scoringConfig    ScoringConfig?
+  reports          Report[]
+  reportSchedules  ReportSchedule[]
+  whiteLabelConfig WhiteLabelConfig?
+  subscription     Subscription?
+  usageQuota       WorkspaceUsageQuota?
+  usageRecords     UsageRecord[]
+  onboarding       OnboardingProgress?
+  analyticsEvents  AnalyticsEvent[]
+
+  @@index([ownerId])
+  @@index([subscriptionId])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String        @db.Uuid
+  role        WorkspaceRole @default(EDITOR)
+  joinedAt    DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model WorkspaceInvite {
+  id          String        @id @default(cuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole @default(EDITOR)
+  token       String        @unique
+  invitedById String        @db.Uuid
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation("InviteSender", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId])
+  @@index([email])
+  @@map("workspace_invites")
+}
+
+// ---------------------------------------------------------------------
+// Domain: Projects (the "site" or "brand" being tracked)
+// ---------------------------------------------------------------------
+
+model Project {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  domain      String
+  description String?
+  country     String? // ISO 3166-1 alpha-2 (e.g. "US", "OM")
+  language    String? // BCP-47 (e.g. "en", "ar")
+  keywords    String[]  @default([])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  workspace          Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  crawls             Crawl[]
+  prompts            Prompt[]
+  competitors        Competitor[]
+  visibilityScans    VisibilityScan[]
+  scoreSnapshots     VisibilityScoreSnapshot[]
+  competitorMetrics  CompetitorDailyMetric[]
+  citationMetrics    CitationDailyMetric[]
+  providerVolatility ProviderVolatilityMetric[]
+  insights           InsightRecord[]
+  recommendations    Recommendation[]
+
+  @@unique([workspaceId, domain])
+  @@index([workspaceId])
+  @@map("projects")
+}
+
+// ---------------------------------------------------------------------
+// AI Visibility
+// ---------------------------------------------------------------------
+
+model Prompt {
+  id                 String         @id @default(cuid())
+  workspaceId        String
+  projectId          String
+  name               String // human-readable label
+  intent             String? // free-form (legacy — prefer `category`)
+  category           PromptCategory @default(INFORMATIONAL)
+  preferredProviders ProviderId[]   @default([])
+  status             PromptStatus   @default(ACTIVE)
+  // Versioning — increment when content changes. Historical runs keep
+  // their content via PromptVersion snapshot.
+  currentVersion     Int            @default(1)
+  createdById        String?        @db.Uuid
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  project  Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions PromptVersion[]
+  runs     PromptRun[]
+
+  @@index([workspaceId, status])
+  @@index([projectId])
+  @@map("prompts")
+}
+
+model PromptVersion {
+  id          String   @id @default(cuid())
+  promptId    String
+  version     Int
+  content     String   @db.Text
+  variables   Json? // [{ name, description, required }]
+  notes       String?
+  createdById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+
+  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@unique([promptId, version])
+  @@map("prompt_versions")
+}
+
+model Competitor {
+  id          String   @id @default(cuid())
+  workspaceId String
+  projectId   String
+  name        String
+  domain      String?
+  aliases     String[] @default([])
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, name])
+  @@index([workspaceId])
+  @@map("competitors")
+}
+
+model VisibilityScan {
+  id             String       @id @default(cuid())
+  workspaceId    String
+  projectId      String
+  status         ScanStatus   @default(QUEUED)
+  promptIds      String[]     @default([])
+  providers      ProviderId[] @default([])
+  totalRuns      Int          @default(0)
+  completedRuns  Int          @default(0)
+  failedRuns     Int          @default(0)
+  score          Int? // 0-100 aggregate AI Visibility Score
+  scoreBreakdown Json? // per-provider sub-scores
+  triggeredById  String?      @db.Uuid
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  error          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runs    PromptRun[]
+
+  @@index([workspaceId, createdAt])
+  @@index([projectId, status])
+  @@map("visibility_scans")
+}
+
+model PromptRun {
+  id               String          @id @default(cuid())
+  scanId           String
+  workspaceId      String
+  promptId         String
+  promptVersion    Int
+  provider         ProviderId
+  model            String
+  status           RunStatus       @default(QUEUED)
+  rawResponse      String?         @db.Text
+  responseHash     String? // sha256 — for cache + dedupe
+  cached           Boolean         @default(false)
+  promptTokens     Int?
+  completionTokens Int?
+  costUsd          Decimal?        @db.Decimal(10, 6)
+  latencyMs        Int?
+  attempts         Int             @default(0)
+  error            String?
+  // Derived analysis
+  brandMentioned   Boolean         @default(false)
+  brandRank        Int? // 1-based position; null when not mentioned
+  sentimentLabel   SentimentLabel?
+  sentimentScore   Float? // -1..1
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  createdAt        DateTime        @default(now())
+
+  scan      VisibilityScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  prompt    Prompt         @relation(fields: [promptId], references: [id], onDelete: Restrict)
+  mentions  Mention[]
+  citations Citation[]
+
+  @@unique([scanId, promptId, provider])
+  @@index([workspaceId, createdAt])
+  @@index([scanId, status])
+  @@map("prompt_runs")
+}
+
+model Mention {
+  id        String      @id @default(cuid())
+  runId     String
+  kind      MentionKind // BRAND or COMPETITOR
+  entity    String // matched name
+  rank      Int // 1-based — order of first occurrence
+  excerpt   String      @db.Text
+  position  Int // char offset
+  createdAt DateTime    @default(now())
+
+  run PromptRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, kind])
+  @@map("mentions")
+}
+
+model Citation {
+  id        String   @id @default(cuid())
+  runId     String
+  url       String
+  domain    String
+  title     String?
+  rank      Int // order cited
+  createdAt DateTime @default(now())
+
+  run PromptRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([domain])
+  @@map("citations")
+}
+
+// ---------------------------------------------------------------------
+// Crawler
+// ---------------------------------------------------------------------
+
+model Crawl {
+  id            String      @id @default(cuid())
+  workspaceId   String
+  projectId     String
+  rootUrl       String
+  status        CrawlStatus @default(QUEUED)
+  maxPages      Int         @default(500)
+  maxDepth      Int         @default(5)
+  respectRobots Boolean     @default(true)
+  userAgent     String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  error         String?
+  pagesFound    Int         @default(0)
+  pagesCrawled  Int         @default(0)
+  pagesFailed   Int         @default(0)
+  issuesFound   Int         @default(0)
+  hasRobotsTxt  Boolean     @default(false)
+  hasSitemap    Boolean     @default(false)
+  robotsTxtUrl  String?
+  sitemapUrls   String[]    @default([])
+  createdById   String?     @db.Uuid
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pages   CrawlPage[]
+  issues  CrawlIssue[]
+  assets  CrawlAsset[]
+
+  @@index([workspaceId, createdAt])
+  @@index([projectId, status])
+  @@map("crawls")
+}
+
+model CrawlPage {
+  id               String          @id @default(cuid())
+  crawlId          String
+  url              String
+  normalizedUrl    String // canonical-form key for dedupe
+  depth            Int             @default(0)
+  status           CrawlPageStatus @default(QUEUED)
+  httpStatus       Int?
+  contentType      String?
+  redirectChain    String[]        @default([])
+  fetchedAt        DateTime?
+  durationMs       Int?
+  bytes            Int?
+  // Extracted SEO data
+  title            String?
+  metaDescription  String?
+  metaRobots       String?
+  canonical        String?
+  ogTitle          String?
+  ogDescription    String?
+  ogImage          String?
+  h1               String[]        @default([])
+  h2               String[]        @default([])
+  h3               String[]        @default([])
+  wordCount        Int?
+  internalLinks    Int             @default(0)
+  externalLinks    Int             @default(0)
+  imagesMissingAlt Int             @default(0)
+  schemas          Json? // raw JSON-LD blocks
+  error            String?
+  retryCount       Int             @default(0)
+  createdAt        DateTime        @default(now())
+
+  crawl  Crawl        @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+  issues CrawlIssue[]
+
+  @@unique([crawlId, normalizedUrl])
+  @@index([crawlId, status])
+  @@index([crawlId, httpStatus])
+  @@map("crawl_pages")
+}
+
+model CrawlIssue {
+  id        String        @id @default(cuid())
+  crawlId   String
+  pageId    String?
+  code      String // e.g. "missing-meta-description"
+  severity  IssueSeverity @default(WARN)
+  category  IssueCategory @default(ON_PAGE)
+  message   String
+  details   Json?
+  createdAt DateTime      @default(now())
+
+  crawl Crawl      @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+  page  CrawlPage? @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([crawlId, severity])
+  @@index([crawlId, code])
+  @@map("crawl_issues")
+}
+
+model CrawlAsset {
+  id        String         @id @default(cuid())
+  crawlId   String
+  kind      CrawlAssetKind
+  url       String
+  content   String?        @db.Text
+  fetchedAt DateTime       @default(now())
+
+  crawl Crawl @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+
+  @@index([crawlId, kind])
+  @@map("crawl_assets")
+}
+
+// ---------------------------------------------------------------------
+// API keys for programmatic access
+// ---------------------------------------------------------------------
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  hashedKey   String    @unique
+  prefix      String // first 8 chars for UI display
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  createdById String    @db.Uuid
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("api_keys")
+}
+
+// ---------------------------------------------------------------------
+// Background jobs (BullMQ persistence mirror for analytics/audit)
+// ---------------------------------------------------------------------
+
+model Job {
+  id          String    @id @default(cuid())
+  workspaceId String
+  queue       String
+  name        String
+  status      JobStatus @default(QUEUED)
+  payload     Json
+  result      Json?
+  error       String?
+  attempts    Int       @default(0)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([queue, status])
+  @@map("jobs")
+}
+
+// ---------------------------------------------------------------------
+// Audit log
+// ---------------------------------------------------------------------
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  actorId     String?  @db.Uuid
+  action      String // e.g. "project.created"
+  target      String? // e.g. "project:abc123"
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@map("audit_events")
+}
+
+// ---------------------------------------------------------------------
+// Visibility Intelligence Engine
+// ---------------------------------------------------------------------
+//
+// The intelligence layer turns raw scan rows into materialized,
+// queryable intelligence: per-workspace scoring config, daily snapshots
+// for fast trend reads, competitor + citation aggregates, and a
+// deterministic insight feed.
+//
+// Design choices:
+// - Daily aggregates are written by the snapshot pipeline AFTER a scan
+//   finalizes. The dashboard reads pre-computed rows; live aggregation
+//   is reserved for ad-hoc queries.
+// - All weights live in ScoringConfig (per-workspace JSON) so changes
+//   are auditable and don't require a deploy.
+// - InsightRecord is the only place "human-readable" strings are
+//   persisted. Generators are deterministic; no LLM is in the
+//   insight-writing path.
+
+model ScoringConfig {
+  id                    String   @id @default(cuid())
+  workspaceId           String   @unique
+  // Tunable weights (sum is not normalized — the scorer clamps).
+  weightCitationRate    Float    @default(60)
+  weightRankBonus       Float    @default(10)
+  weightSentimentBonus  Float    @default(15)
+  weightCitationDensity Float    @default(15)
+  // Per-provider multipliers (1.0 = neutral). Stored as JSON so adding
+  // a new provider doesn't require a migration.
+  providerWeights       Json?
+  // Minimum sample size before a score is considered "high confidence".
+  minRunsForConfidence  Int      @default(20)
+  // When true, the score is sentiment-adjusted (default behavior).
+  sentimentAdjusted     Boolean  @default(true)
+  // When true, citation authority is factored into rank bonus.
+  authorityWeighted     Boolean  @default(false)
+  updatedById           String?  @db.Uuid
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("scoring_configs")
+}
+
+model VisibilityScoreSnapshot {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  projectId      String
+  // Day key (UTC) — one snapshot per project per day. The pipeline
+  // overwrites the day's snapshot when a new scan completes.
+  day            DateTime @db.Date
+  scanId         String?
+  // Aggregate score 0-100 with sub-scores.
+  total          Int
+  byProvider     Json // Record<ProviderId, number>
+  citationRate   Float
+  avgRank        Float?
+  sentimentBonus Float
+  citationCount  Int
+  // 0..1 — based on sample size vs ScoringConfig.minRunsForConfidence.
+  confidence     Float
+  sampleSize     Int
+  // Frozen copy of the weights used — explains the number forever.
+  weightsUsed    Json
+  createdAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, day])
+  @@index([workspaceId, day])
+  @@index([projectId, day(sort: Desc)])
+  @@map("visibility_score_snapshots")
+}
+
+model CompetitorDailyMetric {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  projectId      String
+  day            DateTime @db.Date
+  // Entity name as seen in mentions (may or may not match a Competitor row).
+  entity         String
+  // Optional FK if this entity matched a tracked competitor.
+  competitorId   String?
+  mentions       Int      @default(0)
+  // Runs where this entity appeared at least once.
+  appearedInRuns Int      @default(0)
+  // Total runs scanned that day for this project (denominator).
+  totalRuns      Int      @default(0)
+  // Mean rank for the entity when mentioned (1-based, lower = better).
+  avgRank        Float?
+  // Per-provider counts: Record<ProviderId, number>.
+  byProvider     Json
+  // Per-prompt-category counts: Record<PromptCategory, number>.
+  byCategory     Json
+  // Share of voice within the competitor set this day (0..1).
+  shareOfVoice   Float
+  createdAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, day, entity])
+  @@index([workspaceId, day])
+  @@index([projectId, entity, day])
+  @@map("competitor_daily_metrics")
+}
+
+model CitationDailyMetric {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  projectId      String
+  day            DateTime @db.Date
+  domain         String
+  // Citation count for this domain across all runs that day.
+  count          Int      @default(0)
+  // Runs where this domain appeared at least once.
+  appearedInRuns Int      @default(0)
+  totalRuns      Int      @default(0)
+  // Heuristic 0..1 — built from a curated authority table + frequency.
+  authorityScore Float
+  // Per-provider counts.
+  byProvider     Json
+  // Average position when cited (1-based, lower = better).
+  avgRank        Float?
+  createdAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, day, domain])
+  @@index([workspaceId, day])
+  @@index([projectId, domain, day])
+  @@map("citation_daily_metrics")
+}
+
+model ProviderVolatilityMetric {
+  id            String     @id @default(cuid())
+  workspaceId   String
+  projectId     String
+  day           DateTime   @db.Date
+  provider      ProviderId
+  // Score variance vs. trailing 14-day mean (0..1; 1 = max volatility).
+  volatility    Float
+  // Stability of brand rank (1 - normalized rank std-dev).
+  rankStability Float
+  sampleSize    Int
+  createdAt     DateTime   @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, day, provider])
+  @@index([workspaceId, day])
+  @@map("provider_volatility_metrics")
+}
+
+model InsightRecord {
+  id             String          @id @default(cuid())
+  workspaceId    String
+  projectId      String
+  // Templated key (e.g. "score.delta.positive") — useful for dedupe + UI grouping.
+  kind           InsightKind
+  severity       InsightSeverity @default(INFO)
+  // Human-readable body — assembled deterministically from a template.
+  title          String
+  body           String          @db.Text
+  // 0..1 — generators threshold on this before persisting.
+  confidence     Float
+  // Anything the UI may need to render charts/links.
+  metadata       Json?
+  // Day this insight is "about" — used to dedupe within a window.
+  forDay         DateTime        @db.Date
+  acknowledgedAt DateTime?
+  createdAt      DateTime        @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, kind, forDay])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([projectId, severity, createdAt(sort: Desc)])
+  @@map("insight_records")
+}
+
+// ---------------------------------------------------------------------
+// GEO — Generative Engine Optimization recommendations
+// ---------------------------------------------------------------------
+//
+// Recommendations are deterministic outputs of pure generators that
+// consume the project's current state (crawl issues, AI visibility
+// snapshots, citation gaps, competitor dominance). Each row carries
+// scores so the prioritization framework can rank them without
+// re-deriving the math.
+//
+// Idempotency: every recommendation has a stable `kind` + scoped
+// `targetKey`. Re-running the engine overwrites the row instead of
+// creating a duplicate. When the underlying condition resolves (e.g.
+// the page now has a meta description), the next run marks the row
+// RESOLVED rather than deleting — preserving an audit trail for the UI.
+
+model Recommendation {
+  id             String                   @id @default(cuid())
+  workspaceId    String
+  projectId      String
+  category       RecommendationCategory
+  kind           RecommendationKind
+  // Free-form scope key (e.g. page URL, missing-domain, prompt id).
+  // Combined with `kind` and `projectId` this uniquely identifies the
+  // recommendation so re-generation is idempotent.
+  targetKey      String
+  title          String
+  description    String                   @db.Text
+  // Human-readable action — the user can act on this directly.
+  action         String                   @db.Text
+  // 0..1 — how confident the generator is in the recommendation.
+  confidence     Float
+  // 0..100 — expected impact on AI visibility if implemented.
+  impactScore    Int
+  // EASY | MEDIUM | HARD — implementation cost.
+  difficulty     RecommendationDifficulty
+  // Composite priority (derived: impact * confidence / difficulty cost).
+  priorityScore  Float
+  status         RecommendationStatus     @default(OPEN)
+  // Stashed signals the generator used — useful for explanations + UI.
+  evidence       Json?
+  // Anything else the UI needs (links, page lists, etc.).
+  metadata       Json?
+  // The day this run produced/refreshed the recommendation.
+  generatedFor   DateTime                 @db.Date
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, kind, targetKey])
+  @@index([workspaceId, status, priorityScore(sort: Desc)])
+  @@index([projectId, category, status])
+  @@map("recommendations")
+}
+
+// ---------------------------------------------------------------------
+// Reporting
+// ---------------------------------------------------------------------
+//
+// Reports are async-generated PDF artifacts (executive summary,
+// competitor analysis, GEO recommendations). The flow:
+//
+//   server action / scheduler  →  enqueue report.generate job
+//                              →  worker loads context, renders HTML,
+//                                 generates PDF (Playwright), uploads
+//                                 to Supabase storage, optionally emails
+//                                 + creates share link.
+//
+// Multi-tenant safety: every row carries workspaceId. Shares carry an
+// HMAC-signed token unrelated to the row id; the public share endpoint
+// re-verifies the token and checks expiry.
+
+model Report {
+  id               String         @id @default(cuid())
+  workspaceId      String
+  projectId        String? // null = workspace-level report
+  template         ReportTemplate
+  title            String
+  status           ReportStatus   @default(QUEUED)
+  // Inputs the worker uses (date range, filters, etc.).
+  parameters       Json
+  // Cached, rendered report content — useful for re-rendering with
+  // different branding without re-querying.
+  payload          Json?
+  // AI-generated executive summary (markdown).
+  aiSummary        String?        @db.Text
+  // Object storage path inside the reports bucket.
+  storagePath      String?
+  pdfBytes         Int?
+  // Composite branding key — for white-label clones, this caches the
+  // branding snapshot used so re-renders are reproducible.
+  brandingSnapshot Json?
+  scheduleId       String?
+  triggeredById    String?        @db.Uuid
+  error            String?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workspace  Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  schedule   ReportSchedule?  @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  shares     ReportShare[]
+  deliveries ReportDelivery[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([scheduleId])
+  @@map("reports")
+}
+
+model ReportSchedule {
+  id          String         @id @default(cuid())
+  workspaceId String
+  projectId   String?
+  template    ReportTemplate
+  title       String
+  parameters  Json
+  // Cron expression evaluated by the schedule-tick job.
+  cron        String
+  timezone    String         @default("UTC")
+  // Recipients for the generated PDF email.
+  recipients  String[]       @default([])
+  active      Boolean        @default(true)
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+  createdById String?        @db.Uuid
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  reports   Report[]
+
+  @@index([workspaceId, active])
+  @@index([nextRunAt])
+  @@map("report_schedules")
+}
+
+model ReportShare {
+  id           String    @id @default(cuid())
+  reportId     String
+  workspaceId  String
+  // HMAC-signed token; URL-safe. Independent from `id` so leaking one
+  // doesn't expose the other.
+  token        String    @unique
+  // Optional bcrypt-hashed password.
+  passwordHash String?
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  // Read-only counters for the UI.
+  viewCount    Int       @default(0)
+  lastViewedAt DateTime?
+  createdById  String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@map("report_shares")
+}
+
+model ReportDelivery {
+  id          String                @id @default(cuid())
+  reportId    String
+  channel     ReportDeliveryChannel
+  // For EMAIL: recipient address. For WEBHOOK: target URL.
+  target      String
+  status      ReportDeliveryStatus  @default(QUEUED)
+  attempts    Int                   @default(0)
+  error       String?
+  deliveredAt DateTime?
+  createdAt   DateTime              @default(now())
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@map("report_deliveries")
+}
+
+model WhiteLabelConfig {
+  id           String   @id @default(cuid())
+  workspaceId  String   @unique
+  // Brand name shown on report cover and footer.
+  brandName    String
+  // URL of logo (must be a publicly reachable image).
+  logoUrl      String?
+  primaryColor String   @default("#0F172A")
+  accentColor  String   @default("#2563EB")
+  // Plain-text footer (company address etc.).
+  footerText   String?
+  // Custom domain for shareable links (e.g. reports.acme.com). When
+  // set, share URLs use this host instead of the platform default.
+  shareDomain  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("white_label_configs")
+}
+
+// ---------------------------------------------------------------------
+// Billing — Subscription, Usage Metering, Trial, Onboarding
+// ---------------------------------------------------------------------
+
+// Mirrors the Stripe subscription object for fast local reads.
+// Updated by the billing webhook handler on every relevant Stripe event.
+model Subscription {
+  id                   String             @id @default(cuid())
+  workspaceId          String             @unique
+  stripeSubscriptionId String             @unique
+  stripeCustomerId     String
+  stripePriceId        String
+  planTier             PlanTier
+  status               SubscriptionStatus
+  quantity             Int                @default(1) // seat count
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean            @default(false)
+  canceledAt           DateTime?
+  trialStart           DateTime?
+  trialEnd             DateTime?
+  // Latest invoice data — cached to avoid extra API calls
+  latestInvoiceId      String?
+  latestInvoiceStatus  String?
+  latestInvoiceAmount  Int?               // cents
+  metadata             Json?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([stripeCustomerId])
+  @@map("subscriptions")
+}
+
+// Append-only event log of metered usage. Written on each billable action.
+// Queryable for billing reconciliation, overage detection, and analytics.
+model UsageRecord {
+  id          String    @id @default(cuid())
+  workspaceId String
+  event       UsageEvent
+  // Optional FK to the resource that triggered this (scanId, reportId, …)
+  resourceId  String?
+  resourceType String?
+  quantity    Int       @default(1)
+  // AI provider + model context for token-based metering
+  provider    String?
+  model       String?
+  promptTokens    Int?
+  completionTokens Int?
+  costUsd     Decimal?  @db.Decimal(10, 6)
+  // Billing period the event belongs to (snapped to period start)
+  periodStart DateTime?
+  actorId     String?   @db.Uuid
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, event, createdAt])
+  @@index([workspaceId, periodStart])
+  @@map("usage_records")
+}
+
+// Rolling period totals — maintained via increment for O(1) limit checks.
+// Reset by the billing-period-reset job when currentPeriodEnd rolls over.
+model WorkspaceUsageQuota {
+  id                String   @id @default(cuid())
+  workspaceId       String   @unique
+  periodStart       DateTime
+  periodEnd         DateTime
+  scansUsed         Int      @default(0)
+  promptRunsUsed    Int      @default(0)
+  reportsUsed       Int      @default(0)
+  projectsActive    Int      @default(0) // current count — not a period counter
+  seatsUsed         Int      @default(0)
+  aiTokensUsed      Int      @default(0)
+  aiCostUsd         Decimal  @default(0) @db.Decimal(12, 6)
+  updatedAt         DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("workspace_usage_quotas")
+}
+
+// Tracks onboarding milestone completion for trial activation scoring.
+model OnboardingProgress {
+  id                    String    @id @default(cuid())
+  workspaceId           String    @unique
+  // Milestones
+  projectCreated        Boolean   @default(false)
+  firstScanCompleted    Boolean   @default(false)
+  reportGenerated       Boolean   @default(false)
+  teamMemberInvited     Boolean   @default(false)
+  integrationConnected  Boolean   @default(false)
+  billingAdded          Boolean   @default(false)
+  // Derived activation score (0-100) — updated on each milestone completion
+  activationScore       Int       @default(0)
+  activatedAt           DateTime? // when score crossed activation threshold (>=60)
+  // UTM / acquisition context captured at signup
+  utmSource             String?
+  utmMedium             String?
+  utmCampaign           String?
+  referralCode          String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("onboarding_progress")
+}
+
+// Product analytics event log — dual-written alongside PostHog for
+// internal cohort analysis and retention queries without a third-party dependency.
+model AnalyticsEvent {
+  id          String   @id @default(cuid())
+  workspaceId String?
+  userId      String?  @db.Uuid
+  // Namespaced event name (e.g. "report.exported", "scan.completed")
+  event       String
+  properties  Json?
+  // Session / attribution
+  sessionId   String?
+  anonymousId String?
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  // Server-side context
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, event, createdAt])
+  @@index([userId, event, createdAt])
+  @@index([event, createdAt])
+  @@map("analytics_events")
+}
+
+// Public insight share links — extend the growth loop beyond reports.
+// Any insight or recommendation can be shared with a signed token.
+model InsightShare {
+  id          String    @id @default(cuid())
+  workspaceId String
+  // Polymorphic target
+  targetType  String    // "insight" | "recommendation" | "report"
+  targetId    String
+  token       String    @unique
+  title       String?
+  // Optional branding override for the shared view
+  brandedExport Boolean @default(false)
+  passwordHash String?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  viewCount   Int       @default(0)
+  lastViewedAt DateTime?
+  createdById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
+  @@index([targetType, targetId])
+  @@map("insight_shares")
+}
+
+// ---------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------
+
+enum WorkspaceRole {
+  OWNER // full control incl. billing + delete
+  ADMIN // manage members and settings; cannot delete workspace
+  EDITOR // create/edit domain resources
+  VIEWER // read-only
+}
+
+enum PlanTier {
+  FREE
+  STARTER
+  PRO
+  AGENCY
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  INCOMPLETE
+  PAUSED
+}
+
+enum UsageEvent {
+  SCAN_COMPLETED
+  PROMPT_RUN_COMPLETED
+  REPORT_GENERATED
+  REPORT_EXPORTED
+  CRAWL_COMPLETED
+  API_CALL
+  AI_TOKEN_CONSUMED
+  INSIGHT_SHARED
+  TEAM_MEMBER_INVITED
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum CrawlStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum CrawlPageStatus {
+  QUEUED
+  FETCHING
+  PARSED
+  FAILED
+  SKIPPED // robots-blocked or out-of-scope
+}
+
+enum IssueSeverity {
+  INFO
+  WARN
+  ERROR
+}
+
+enum IssueCategory {
+  ON_PAGE
+  TECHNICAL
+  CONTENT
+  STRUCTURED_DATA
+  PERFORMANCE
+  ACCESSIBILITY
+  INDEXABILITY
+}
+
+enum CrawlAssetKind {
+  ROBOTS_TXT
+  SITEMAP_XML
+}
+
+enum ProviderId {
+  OPENAI
+  ANTHROPIC
+  GOOGLE
+  PERPLEXITY
+}
+
+enum PromptStatus {
+  ACTIVE
+  ARCHIVED
+  DRAFT
+}
+
+enum PromptCategory {
+  COMMERCIAL
+  INFORMATIONAL
+  LOCAL_SEO
+  BRAND
+  COMPARISON
+  TRANSACTIONAL
+}
+
+enum ScanStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CACHED
+}
+
+enum SentimentLabel {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+  MIXED
+}
+
+enum MentionKind {
+  BRAND
+  COMPETITOR
+}
+
+enum InsightKind {
+  SCORE_DELTA_POSITIVE
+  SCORE_DELTA_NEGATIVE
+  PROVIDER_DELTA_POSITIVE
+  PROVIDER_DELTA_NEGATIVE
+  COMPETITOR_DOMINANCE
+  COMPETITOR_GAP
+  COMPETITOR_NEW_ENTRANT
+  CITATION_OPPORTUNITY
+  CITATION_AUTHORITY_GAP
+  CATEGORY_WEAK_SPOT
+  PROVIDER_VOLATILITY
+  ANOMALY_DETECTED
+  RANK_IMPROVED
+  RANK_DECLINED
+  SENTIMENT_SHIFT
+  // Executive Insight Engine — strategic-level signals
+  EXECUTIVE_WEEKLY_SUMMARY
+  COMPETITIVE_THREAT
+  AI_PERCEPTION_POSITIVE
+  AI_PERCEPTION_NEGATIVE
+  BRAND_TRUST_SIGNAL
+  PROVIDER_RECOMMENDATION
+  GROWTH_OPPORTUNITY
+  STRATEGIC_ALERT
+}
+
+enum InsightSeverity {
+  INFO
+  ATTENTION
+  CRITICAL
+}
+
+enum RecommendationCategory {
+  CONTENT
+  TECHNICAL
+  AUTHORITY
+  AI_OPTIMIZATION
+}
+
+enum RecommendationKind {
+  // Content
+  CONTENT_TOPIC_CLUSTER_GAP
+  CONTENT_FAQ_OPPORTUNITY
+  CONTENT_SEMANTIC_GAP
+  CONTENT_COMPARISON_PAGE
+  CONTENT_AUTHORITY_PILLAR
+  // Technical
+  TECH_MISSING_SCHEMA
+  TECH_METADATA_GAP
+  TECH_CRAWLABILITY_ISSUE
+  TECH_PAGE_STRUCTURE_ISSUE
+  TECH_PERFORMANCE_ISSUE
+  // Authority
+  AUTHORITY_CITATION_OPPORTUNITY
+  AUTHORITY_BACKLINK_OPPORTUNITY
+  AUTHORITY_PR_OPPORTUNITY
+  AUTHORITY_COMMUNITY_VISIBILITY
+  // AI optimization
+  AI_PROMPT_ALIGNMENT
+  AI_ENTITY_STRENGTHENING
+  AI_TRUST_SIGNAL
+  AI_EEAT_IMPROVEMENT
+}
+
+enum RecommendationDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum RecommendationStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+  STALE
+}
+
+enum ReportTemplate {
+  EXECUTIVE_SUMMARY
+  COMPETITOR_ANALYSIS
+  GEO_OPTIMIZATION
+  AI_VISIBILITY_DEEP_DIVE
+  CITATION_AUTHORITY
+}
+
+enum ReportStatus {
+  QUEUED
+  RENDERING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ReportDeliveryChannel {
+  EMAIL
+  WEBHOOK
+  IN_APP
+}
+
+enum ReportDeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+  BOUNCED
+}

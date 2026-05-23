@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "ES2022"],
+    "jsx": "preserve",
+    "noEmit": true,
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/app/*": ["./src/app/*"],
+      "@/modules/*": ["./src/modules/*"],
+      "@/components/*": ["./src/components/*"],
+      "@/lib/*": ["./src/lib/*"],
+      "@/config/*": ["./src/config/*"],
+      "@/hooks/*": ["./src/hooks/*"],
+      "@/stores/*": ["./src/stores/*"],
+      "@/types/*": ["./src/types/*"],
+      "@/styles/*": ["./src/styles/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": ["node_modules", ".next"]
+}
