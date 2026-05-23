@@ -1,6 +1,6 @@
 {
-  "buildCommand": "pnpm --filter web run build",
-  "installCommand": "pnpm install --frozen-lockfile",
-  "outputDirectory": "apps/web/.next",
+  "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm exec prisma generate && pnpm exec next build",
+  "outputDirectory": ".next",
   "framework": "nextjs"
 }
