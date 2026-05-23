@@ -50,6 +50,6 @@ export const config = {
      *  - favicon, sitemap, robots
      *  - Any path containing a file extension (images, fonts)
      */
-    String.raw`/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|.*\..*).*)`
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|.*\\..*).*)"
   ],
 };
