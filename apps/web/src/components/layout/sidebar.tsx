@@ -58,7 +58,7 @@ const NAV: NavItem[] = [
 export function Sidebar({ basePath = "" }: Readonly<{ basePath?: string }>) {
   const pathname = usePathname();
   return (
-    <aside className="bg-card border-border hidden h-screen w-60 shrink-0 flex-col border-r md:flex">
+    <aside className="bg-card border-border sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r md:flex">
       <div className="flex h-14 items-center gap-2 px-5">
         <div className="bg-foreground text-background flex h-7 w-7 items-center justify-center rounded-md">
           <Command className="h-4 w-4" strokeWidth={2.5} />
