@@ -7,7 +7,8 @@ import { requireRole } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma/client";
 import { actionRateLimit } from "@/lib/security/rate-limit";
 import { audit } from "@/lib/audit/log";
-import { queues } from "@/lib/queue";
+import { getQueues } from "@/lib/queue";
+import { ServiceUnavailable } from "@/lib/errors";
 import { reportRepository } from "../infrastructure/report.repository";
 import { nextRunFromCron } from "../application/scheduler";
 
@@ -63,6 +64,13 @@ export const createReportAction = safeAction(
       parameters: input.parameters,
       triggeredById: ctx.user.id,
     });
+
+    const queues = getQueues();
+    if (!queues) {
+      await prisma.report.delete({ where: { id: report.id } });
+      throw ServiceUnavailable("Background job processing is not configured. Please set REDIS_URL.");
+    }
+
     await queues.reportGenerate.add(
       "generate",
       {
@@ -219,6 +227,12 @@ export const retryReportAction = safeAction(
     if (report.status !== "FAILED") {
       return { ok: false as const, error: "not-failed" as const };
     }
+
+    const queues = getQueues();
+    if (!queues) {
+      throw ServiceUnavailable("Background job processing is not configured. Please set REDIS_URL.");
+    }
+
     await prisma.report.update({
       where: { id: input.reportId },
       data: { status: "QUEUED", error: null, startedAt: null, finishedAt: null },

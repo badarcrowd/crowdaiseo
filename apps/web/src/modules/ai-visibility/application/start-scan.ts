@@ -1,8 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/prisma/client";
-import { queues } from "@/lib/queue";
+import { getQueues } from "@/lib/queue";
 import type { AiVisibilityScanPayload } from "@/lib/queue/types";
-import { ValidationError } from "@/lib/errors";
+import { ValidationError, ServiceUnavailable } from "@/lib/errors";
 import type { ProviderId } from "@prisma/client";
 import { ALL_PROVIDERS } from "../domain/providers";
 import { bootstrapVisibilityProject } from "./bootstrap";
@@ -50,6 +50,13 @@ export const startVisibilityScan = async (input: StartScanInput) => {
     },
     select: { id: true },
   });
+
+  const queues = getQueues();
+  if (!queues) {
+    // Clean up the created scan record since we can't process it
+    await prisma.visibilityScan.delete({ where: { id: scan.id } });
+    throw ServiceUnavailable("Background job processing is not configured. Please set REDIS_URL.");
+  }
 
   await queues.aiVisibilityScan.add(
     "start",

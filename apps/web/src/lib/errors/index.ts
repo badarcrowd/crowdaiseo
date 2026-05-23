@@ -74,3 +74,6 @@ export const ValidationError = (details: unknown, msg = "Invalid input") =>
 
 export const Conflict = (msg: string) =>
   new AppError({ code: "CONFLICT", message: msg });
+
+export const ServiceUnavailable = (msg = "Service temporarily unavailable") =>
+  new AppError({ code: "INTEGRATION_FAILURE", message: msg, status: 503 });

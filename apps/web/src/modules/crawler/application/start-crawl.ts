@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/prisma/client";
-import { queues } from "@/lib/queue";
+import { getQueues } from "@/lib/queue";
 import type { CrawlStartPayload } from "@/lib/queue/types";
 import { DEFAULT_USER_AGENT } from "../domain/entities";
 import { normalizeUrl } from "../domain/url";
-import { ValidationError } from "@/lib/errors";
+import { ValidationError, ServiceUnavailable } from "@/lib/errors";
 
 export type StartCrawlInput = {
   workspaceId: string;
@@ -40,6 +40,13 @@ export const startCrawl = async (input: StartCrawlInput) => {
     },
     select: { id: true, maxPages: true, maxDepth: true, respectRobots: true, userAgent: true },
   });
+
+  const queues = getQueues();
+  if (!queues) {
+    // Clean up the created crawl record since we can't process it
+    await prisma.crawl.delete({ where: { id: crawl.id } });
+    throw ServiceUnavailable("Background job processing is not configured. Please set REDIS_URL.");
+  }
 
   await queues.crawlStart.add(
     "start",
