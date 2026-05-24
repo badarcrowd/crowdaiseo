@@ -59,8 +59,9 @@ export async function fetchAnalytics(
         orderBy: { createdAt: "asc" },
         take: 5000,
       }),
-      // Competitor entity names (COMPETITOR-kind mentions only)
-      prisma.mention.findMany({
+      // Competitor entity names (COMPETITOR-kind mentions only) - optimized using groupBy SQL aggregation
+      prisma.mention.groupBy({
+        by: ["entity"],
         where: {
           kind: "COMPETITOR",
           run: {
@@ -70,11 +71,13 @@ export async function fetchAnalytics(
             ...providerWhere,
           },
         },
-        select: { entity: true },
-        take: 20_000,
+        _count: {
+          entity: true,
+        },
       }),
-      // Citation domains
-      prisma.citation.findMany({
+      // Citation domains - optimized using groupBy SQL aggregation
+      prisma.citation.groupBy({
+        by: ["domain"],
         where: {
           run: {
             workspaceId,
@@ -83,8 +86,9 @@ export async function fetchAnalytics(
             ...providerWhere,
           },
         },
-        select: { domain: true },
-        take: 20_000,
+        _count: {
+          domain: true,
+        },
       }),
       prisma.visibilityScan.count({
         where: { workspaceId, status: "RUNNING" },
@@ -219,34 +223,28 @@ export async function fetchAnalytics(
   );
 
   // ---- Competitor stats ----
-  const compCounts = new Map<string, number>();
-  for (const m of competitorMentions) {
-    compCounts.set(m.entity, (compCounts.get(m.entity) ?? 0) + 1);
-  }
-  const totalComp = competitorMentions.length;
-  const competitorStats: CompetitorStat[] = [...compCounts.entries()]
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 10)
-    .map(([entity, count]) => ({
-      entity,
-      count,
-      share: totalComp > 0 ? count / totalComp : 0,
-    }));
+  const allCompetitorStats = competitorMentions.map((m) => ({
+    entity: m.entity,
+    count: m._count.entity,
+    share: 0,
+  })).sort((a, b) => b.count - a.count);
+  const totalComp = allCompetitorStats.reduce((sum, item) => sum + item.count, 0);
+  allCompetitorStats.forEach((item) => {
+    item.share = totalComp > 0 ? item.count / totalComp : 0;
+  });
+  const competitorStats = allCompetitorStats.slice(0, 10);
 
   // ---- Citation stats ----
-  const domainCounts = new Map<string, number>();
-  for (const c of citations) {
-    domainCounts.set(c.domain, (domainCounts.get(c.domain) ?? 0) + 1);
-  }
-  const totalCit = citations.length;
-  const citationStats: CitationStat[] = [...domainCounts.entries()]
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 15)
-    .map(([domain, count]) => ({
-      domain,
-      count,
-      share: totalCit > 0 ? count / totalCit : 0,
-    }));
+  const allCitationStats = citations.map((c) => ({
+    domain: c.domain,
+    count: c._count.domain,
+    share: 0,
+  })).sort((a, b) => b.count - a.count);
+  const totalCit = allCitationStats.reduce((sum, item) => sum + item.count, 0);
+  allCitationStats.forEach((item) => {
+    item.share = totalCit > 0 ? item.count / totalCit : 0;
+  });
+  const citationStats = allCitationStats.slice(0, 15);
 
   // ---- Prompt stats ----
   const byPrompt = groupBy(runs, (r) => r.promptId);

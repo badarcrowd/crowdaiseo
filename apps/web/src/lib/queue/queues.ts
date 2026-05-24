@@ -40,8 +40,8 @@ const baseDefaults = {
 };
 
 // Cache for lazy-loaded queues
-let _queues: typeof queues | null = null;
-let _queueEvents: typeof queueEvents | null = null;
+let _queues: ReturnType<typeof createQueues> | null = null;
+let _queueEvents: ReturnType<typeof createQueueEvents> | null = null;
 
 function createQueues() {
   const connection = createQueueConnection();
@@ -112,19 +112,35 @@ function createQueueEvents() {
 // Lazy getters
 export function getQueues() {
   if (_queues === null) {
-    _queues = createQueues() as typeof queues;
+    _queues = createQueues();
   }
   return _queues;
 }
 
 export function getQueueEvents() {
   if (_queueEvents === null) {
-    _queueEvents = createQueueEvents() as typeof queueEvents;
+    _queueEvents = createQueueEvents();
   }
   return _queueEvents;
 }
 
-// Legacy exports for backward compatibility - will be null during build
-// Use getQueues() and getQueueEvents() instead for safe access
-export const queues = null as unknown as NonNullable<ReturnType<typeof createQueues>>;
-export const queueEvents = null as unknown as NonNullable<ReturnType<typeof createQueueEvents>>;
+// Legacy exports for backward compatibility - dynamically resolved via Proxies to prevent connection during builds
+export const queues = new Proxy({} as any, {
+  get(target, prop) {
+    const q = getQueues();
+    if (!q) {
+      throw new Error(`Queue "${String(prop)}" accessed before queues are initialized.`);
+    }
+    return (q as any)[prop];
+  },
+}) as unknown as NonNullable<ReturnType<typeof createQueues>>;
+
+export const queueEvents = new Proxy({} as any, {
+  get(target, prop) {
+    const qe = getQueueEvents();
+    if (!qe) {
+      throw new Error(`QueueEvents "${String(prop)}" accessed before queueEvents are initialized.`);
+    }
+    return (qe as any)[prop];
+  },
+}) as unknown as NonNullable<ReturnType<typeof createQueueEvents>>;

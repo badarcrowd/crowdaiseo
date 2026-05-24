@@ -75,7 +75,7 @@ export async function getSeoAnalytics(
   const since = new Date(Date.now() - 30 * 86_400_000);
   const prevSince = new Date(Date.now() - 60 * 86_400_000);
 
-  const [latestCrawl, crawls, pages, issues, citations, aiRuns] =
+  const [latestCrawl, crawls, pages, issues, citations, aiRuns, avgPositionAggregate] =
     await Promise.all([
       prisma.crawl.findFirst({
         where: { workspaceId, projectId: project.id },
@@ -125,15 +125,18 @@ export async function getSeoAnalytics(
           fetchedAt: true,
         },
       }),
-      prisma.crawlIssue.findMany({
+      prisma.crawlIssue.groupBy({
+        by: ["severity", "category", "code"],
         where: {
           crawl: { workspaceId, projectId: project.id },
           createdAt: { gte: since },
         },
-        select: { severity: true, category: true, code: true },
-        take: 20_000,
+        _count: {
+          _all: true,
+        },
       }),
-      prisma.citation.findMany({
+      prisma.citation.groupBy({
+        by: ["domain"],
         where: {
           run: {
             workspaceId,
@@ -141,8 +144,6 @@ export async function getSeoAnalytics(
             createdAt: { gte: since },
           },
         },
-        select: { domain: true, createdAt: true },
-        take: 20_000,
       }),
       prisma.promptRun.findMany({
         where: {
@@ -150,15 +151,40 @@ export async function getSeoAnalytics(
           status: { in: ["COMPLETED", "CACHED"] },
           createdAt: { gte: since },
         },
-        select: { createdAt: true, brandMentioned: true, brandRank: true },
+        select: { createdAt: true, brandMentioned: true },
         take: 10_000,
+      }),
+      prisma.promptRun.aggregate({
+        where: {
+          workspaceId,
+          status: { in: ["COMPLETED", "CACHED"] },
+          createdAt: { gte: since },
+          brandRank: { not: null },
+        },
+        _avg: {
+          brandRank: true,
+        },
       }),
     ]);
 
   const scoreTrend = buildScoreTrend(crawls);
+
+  // Map the grouped issues back to a lightweight array of mock SeoIssue objects to keep existing scoring functions fully intact.
+  const flatIssues: SeoIssue[] = [];
+  for (const group of issues) {
+    const count = group._count._all;
+    for (let i = 0; i < count; i++) {
+      flatIssues.push({
+        severity: group.severity,
+        category: group.category,
+        code: group.code,
+      });
+    }
+  }
+
   const latestScore = scoreTrend.at(-1) ?? computeSeoScore({
     pages,
-    issues,
+    issues: flatIssues,
     latestCrawl,
   });
   const previousScore = scoreTrend.at(-8) ?? scoreTrend[0] ?? latestScore;
@@ -167,9 +193,12 @@ export async function getSeoAnalytics(
   const organicSeries = estimateOrganicSeries(labels, pages);
   const technicalRows = buildTechnicalRows({
     pages,
-    issues,
+    issues: flatIssues,
     latestCrawl,
   });
+
+  const avgPosition = avgPositionAggregate._avg.brandRank;
+  const mockAiRuns = avgPosition !== null ? [{ brandRank: avgPosition }] : [];
 
   return {
     project: { id: project.id, name: project.name, domain: project.domain },
@@ -186,15 +215,11 @@ export async function getSeoAnalytics(
     organicSeries,
     aiReferralSeries,
     labels,
-    backlinks: new Set(citations.map((citation) => citation.domain)).size,
-    avgPosition: avg(
-      aiRuns
-        .filter((run): run is typeof run & { brandRank: number } => run.brandRank !== null)
-        .map((run) => run.brandRank),
-    ),
+    backlinks: citations.length,
+    avgPosition,
     technicalRows,
     landingPages: buildLandingPages(pages),
-    keywordRows: buildKeywordRows(project.keywords, aiRuns),
+    keywordRows: buildKeywordRows(project.keywords, mockAiRuns),
   };
 }
 
