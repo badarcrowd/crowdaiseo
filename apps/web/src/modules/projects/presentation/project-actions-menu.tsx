@@ -99,7 +99,10 @@ function EditProjectDialog({
   const updateCompetitorName = (i: number, name: string) => {
     setState((s) => {
       const next = [...s.competitors];
-      next[i] = { ...next[i], name };
+      const comp = next[i];
+      if (comp) {
+        next[i] = { name, domain: comp.domain };
+      }
       return { ...s, competitors: next };
     });
   };
@@ -107,7 +110,10 @@ function EditProjectDialog({
   const updateCompetitorDomain = (i: number, domain: string) => {
     setState((s) => {
       const next = [...s.competitors];
-      next[i] = { ...next[i], domain };
+      const comp = next[i];
+      if (comp) {
+        next[i] = { name: comp.name, domain };
+      }
       return { ...s, competitors: next };
     });
   };
@@ -241,7 +247,7 @@ function EditProjectDialog({
             <div className="text-foreground text-xs font-semibold uppercase tracking-wider">
               Keywords
             </div>
-            <Field hint="Press Enter or comma to add.">
+            <Field label="Keywords" hint="Press Enter or comma to add.">
               <TagInput
                 values={state.keywords}
                 onChange={(keywords) => setState((s) => ({ ...s, keywords }))}

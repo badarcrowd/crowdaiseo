@@ -64,7 +64,7 @@ export function ProjectWizard({
   const [discovering, setDiscovering] = useState(false);
   const [discoverProvider, setDiscoverProvider] = useState<string | null>(null);
 
-  const step = STEPS[stepIdx];
+  const step = STEPS[stepIdx] ?? STEPS[0];
   const isLast = stepIdx === STEPS.length - 1;
 
   const handleDiscover = async () => {
@@ -505,7 +505,7 @@ function KeywordsStep({
             {keywords.length < 200 ? ` · up to ${200 - keywords.length} more` : ""}
           </p>
           {discoveredProvider && (
-            <Badge variant="secondary" className="gap-1 text-[10px]">
+            <Badge variant="outline" className="gap-1 text-[10px]">
               <Sparkles className="h-2.5 w-2.5" />
               AI-assisted
             </Badge>
@@ -573,8 +573,11 @@ function CompetitorsStep({
               value={c.name}
               onChange={(e) => {
                 const next = [...competitors];
-                next[i] = { ...next[i], name: e.target.value };
-                onChange(next);
+                const comp = next[i];
+                if (comp) {
+                  next[i] = { name: e.target.value, domain: comp.domain };
+                  onChange(next);
+                }
               }}
               placeholder="Competitor name"
               className="flex-1"
@@ -583,8 +586,11 @@ function CompetitorsStep({
               value={c.domain ?? ""}
               onChange={(e) => {
                 const next = [...competitors];
-                next[i] = { ...next[i], domain: e.target.value };
-                onChange(next);
+                const comp = next[i];
+                if (comp) {
+                  next[i] = { name: comp.name, domain: e.target.value };
+                  onChange(next);
+                }
               }}
               placeholder="competitor.com"
               className="flex-1"
@@ -611,7 +617,7 @@ function CompetitorsStep({
             <Plus className="h-3.5 w-3.5" /> Add manually
           </Button>
           {discoveredProvider && competitors.length > 0 && (
-            <Badge variant="secondary" className="gap-1 text-[10px]">
+            <Badge variant="outline" className="gap-1 text-[10px]">
               <Sparkles className="h-2.5 w-2.5" />
               AI-assisted
             </Badge>

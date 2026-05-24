@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { prisma } from "@/lib/prisma/client";
 import { requireMembership } from "@/lib/auth/session";
+import { DeleteCrawlButton } from "@/modules/crawler/presentation/delete-crawl-button";
 
 export default async function CrawlsIndexPage({
   params,
@@ -47,6 +48,7 @@ export default async function CrawlsIndexPage({
                     <th className="px-3 py-2 font-medium">Pages</th>
                     <th className="px-3 py-2 font-medium">Issues</th>
                     <th className="px-3 py-2 font-medium">Started</th>
+                    <th className="px-3 py-2 font-medium text-right pr-6">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -117,6 +119,9 @@ export default async function CrawlsIndexPage({
                         {c.startedAt
                           ? new Date(c.startedAt).toLocaleString()
                           : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right pr-4">
+                        <DeleteCrawlButton workspaceId={ws.id} crawlId={c.id} />
                       </td>
                     </tr>
                   ))}

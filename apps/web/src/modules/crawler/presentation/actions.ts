@@ -70,3 +70,20 @@ export const cancelCrawlAction = safeAction(
     return { crawlId: input.crawlId };
   },
 );
+
+const deleteCrawlSchema = z.object({
+  workspaceId: z.string().min(1),
+  crawlId: z.string().min(1),
+});
+
+export const deleteCrawlAction = safeAction(
+  deleteCrawlSchema,
+  async (input) => {
+    const ctx = await requireRole(input.workspaceId, "EDITOR");
+    await prisma.crawl.delete({
+      where: { id: input.crawlId, workspaceId: input.workspaceId },
+    });
+    revalidatePath(`/app/w/${ctx.workspace.slug}/crawls`);
+    return { crawlId: input.crawlId };
+  },
+);
