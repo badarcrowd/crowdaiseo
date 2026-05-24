@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "worker:dev": "tsx watch --env-file=.env.local src/lib/queue/worker.ts",
-    "worker:start": "tsx --env-file=.env.local src/lib/queue/worker.ts"
+    "worker:start": "tsx src/lib/queue/worker.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
